@@ -1,0 +1,7 @@
+{
+    "configuration": "PSRAM=disabled,PartitionScheme=default,CPUFreq=240,FlashMode=qio,FlashFreq=80,FlashSize=4M,UploadSpeed=921600,DebugLevel=none",
+    "board": "esp32:esp32:esp32",
+    "sketch": "esp_main\\esp_main.ino",
+    "output": "arduino_output",
+    "port": "COM5"
+}
