@@ -24,10 +24,19 @@ void wifi_connect() {
   delay(1000);
 }
 
-void http_request() {
+void postAPI(String api, String data) {
+  /*
+  POST /api/[api]
+  Authorization: Bearer [token]
+
+  [data]
+  */
   HTTPClient http;
-  http.begin("https://example.com/");
-  int httpCode = http.GET();
+
+  http.begin(SERVER_HOST + "api/" + api);
+  http.addHeader("Authorization", "Bearer " + BEARER_TOKEN);
+
+  int httpCode = http.POST(data);
   if (httpCode > 0) {
     String response = http.getString();
     printf("%s\n", response.c_str());
@@ -36,13 +45,17 @@ void http_request() {
   }
 }
 
-static void readTemp(void *arg) {
-  for (;;) {
-    tempVal = analogRead(tempPin); // read sensor
-    volts = tempVal / 1023.0; // calculate volts
-    temp = (volts - 0.5) * 100 ; // calculate temperature in Celcius
+float getTemp() {
+  tempVal = analogRead(tempPin); // read sensor
+  volts = tempVal / 1023.0; // calculate volts
+  temp = (volts - 0.5) * 100 ; // calculate temperature in Celcius
 
-    printf("[ ] Temperature: %f °C\n", temp); // print temperature
+  return temp;
+}
+
+static void readTempLoop(void *arg) {
+  for (;;) {
+    printf("[ ] Temperature: %f °C\n", getTemp()); // print temperature
     delay(1000);
   }
 }
@@ -60,10 +73,10 @@ void setup() {
   printf("Connecting to %s", ssid);
   wifi_connect();
 
-  http_request();
+  postAPI("temperature", String(getTemp()));
 
   xTaskCreatePinnedToCore(
-    readTemp,  // pvTaskCode
+    readTempLoop,  // pvTaskCode
     "temp_read_task",  // pcName
     2048,  // usStackDepth
     NULL,  // pvParameters
