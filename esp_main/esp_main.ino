@@ -1,3 +1,6 @@
+#include <Wire.h>
+#include <Adafruit_Sensor.h>
+#include <Adafruit_BME280.h>
 #include <WiFi.h>
 #include <HTTPClient.h>
 #include "secret.h"
@@ -6,25 +9,21 @@
 const char* ssid       = WIFI_SSID;
 const char* password   = WIFI_PASSWORD;
 
-const int tempPin = 32;
-
-int tempVal;
-float volts;
-float temp;
-TaskHandle_t tempTask;
+TaskHandle_t bmeTask;
 TaskHandle_t wifiTask;
+Adafruit_BME280 bme; // I2C
 
 void wifi_connect() {
   WiFi.begin(ssid, password);
   while (WiFi.status() != WL_CONNECTED) {
       delay(500);
-      printf(".");
   }
-  printf(" CONNECTED\r\n");
+  printf("[+] CONNECTED\n");
   delay(1000);
 }
 
 void postAPI(String api, String data) {
+  // postAPI("temperature", "21.53");
   /*
   POST /api/[api]
   Authorization: Bearer [token]
@@ -41,52 +40,54 @@ void postAPI(String api, String data) {
     String response = http.getString();
     printf("%s\n", response.c_str());
   } else {
-    printf("Error on HTTP request\n");
+    printf("[-] Error on HTTP request\n");
   }
 }
 
-float getTemp() {
-  tempVal = analogRead(tempPin); // read sensor
-  volts = tempVal / 1023.0; // calculate volts
-  temp = (volts - 0.5) * 100 ; // calculate temperature in Celcius
-
-  return temp;
-}
-
-static void readTempLoop(void *arg) {
+static void readBMELoop(void *arg) {
   for (;;) {
-    printf("[ ] Temperature: %f °C\n", getTemp()); // print temperature
-    delay(1000);
+    printf("-----------------------\n");
+    printf("[ ] Temperature = %f °C\n", bme.readTemperature());
+    printf("[ ] Pressure = %f hPa\n", bme.readPressure() / 100.0F);
+    printf("[ ] Humidity = %f %\n", bme.readHumidity());
+    delay(5000);
   }
 }
 
 void setup() {
-  int app_cpu = 0; // CPU number
-
   delay(500); // Pause for serial setup
 
+  // Get CPU number
+  int app_cpu = 0;
   app_cpu = xPortGetCoreID();
   printf("[+] app_cpu is %d (%s core)\n",
          app_cpu,
          app_cpu > 0 ? "Dual" : "Single");
 
-  printf("Connecting to %s", ssid);
+  // Test BME280
+  bool status = bme.begin(0x76);  
+  if (!status) {
+    printf("[-] Could not find a valid BME280 sensor, check wiring!");
+    while (1);  // Stop
+  }
+
+  // Connect to WiFi
+  printf("[*] Connecting to %s...\n", ssid);
   wifi_connect();
 
-  postAPI("temperature", String(getTemp()));
-
+  // Create tasks
   xTaskCreatePinnedToCore(
-    readTempLoop,  // pvTaskCode
-    "temp_read_task",  // pcName
+    readBMELoop,  // pvTaskCode
+    "temp_bme_task",  // pcName
     2048,  // usStackDepth
     NULL,  // pvParameters
     1,  // uxPriority
-    &tempTask,  // pvCreatedTask
+    &bmeTask,  // pvCreatedTask
     app_cpu  // xCoreID
   );
-  printf("[+] Created readTemp() task\n");
+  printf("[+] Created readBMELoop() task\n");
 }
 
 void loop() {
-  delay(2000);
+  delay(1000);
 }
