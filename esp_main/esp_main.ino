@@ -1,41 +1,45 @@
-#include <Wire.h>
 #include <Adafruit_Sensor.h>
 #include <Adafruit_BME280.h>
 #include <WiFi.h>
-#include <HTTPClient.h>
+#include "EEPROM.h"
 #include "secret.h"
 
-// data below is set as a define in the file secret.h
-const char* ssid       = WIFI_SSID;
-const char* password   = WIFI_PASSWORD;
-
-TaskHandle_t bmeTask;
-TaskHandle_t wifiTask;
-Adafruit_BME280 bme; // I2C
-
-String getUUID(int length) {
-    String hex[16] = {"0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "a", "b", "c", "d", "e", "f"};
-    
-    String uuid = "";
-    for (int i = 0; i < length; i++) {
-        uuid += hex[random(0, 16)];
-    }
-    return uuid;
-}
+#define EEPROM_SIZE 20
+#define EEPROM_UUID_ADDR 0
+#define UUID_SIZE 20
 
 String uuid;
+TaskHandle_t bmeTask;
+TaskHandle_t wifiTask;
+Adafruit_BME280 bme;  // I2C
 
-void wifi_connect() {
-  WiFi.begin(ssid, password);
-  while (WiFi.status() != WL_CONNECTED) {
-      delay(500);
+String generateUUID(int length)
+{
+  String hex[16] = {"0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "a", "b", "c", "d", "e", "f"};
+
+  String uuid = "";
+  for (int i = 0; i < length; i++)
+  {
+    uuid += hex[random(0, 16)];
+  }
+  return uuid;
+}
+
+void wifi_connect()
+{
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  while (WiFi.status() != WL_CONNECTED)
+  {
+    delay(500);
   }
   printf("[+] CONNECTED\n");
   delay(1000);
 }
 
-static void readBMELoop(void *arg) {
-  for (;;) {
+static void readBMELoop(void *arg)
+{
+  for (;;)
+  {
     printf("------------- DATA -------------\n");
     printf("[ ] UUID = %s\n", uuid.c_str());
     printf("[ ] Temperature = %f °C\n", bme.readTemperature());
@@ -45,8 +49,10 @@ static void readBMELoop(void *arg) {
   }
 }
 
-void setup() {
+void setup()
+{
   delay(500); // Pause for serial setup
+  EEPROM.begin(EEPROM_SIZE);
 
   // Get CPU number
   int app_cpu = 0;
@@ -55,34 +61,52 @@ void setup() {
          app_cpu,
          app_cpu > 0 ? "Dual" : "Single");
 
-  // Generate UUID
-  uuid = getUUID(20);
-  printf("[+] ESP32 UUID: %s\n", uuid.c_str());
+  // Get UUID from EEPROM
+  for (int i = 0; i < UUID_SIZE; i++) {
+    byte letter = EEPROM.read(EEPROM_UUID_ADDR+i);
+
+    if (letter == 0) break;  // If end of string
+
+    uuid += char(letter);
+  }
+  // If not found, create new UUID
+  if (uuid.length() < UUID_SIZE) {
+    uuid = generateUUID(UUID_SIZE);  // Generate new one
+    // Save to EEPROM
+    for (int i = 0; i < UUID_SIZE; i++) {
+      EEPROM.write(EEPROM_UUID_ADDR+i, uuid[i]);
+    }
+    EEPROM.commit();
+  }
+  printf("[+] UUID: %s\n", uuid.c_str());
 
   // Test BME280
-  bool status = bme.begin(0x76);  
-  if (!status) {
+  bool status = bme.begin(0x76);
+  if (!status)
+  {
     printf("[-] Could not find a valid BME280 sensor, check wiring!");
-    while (1);  // Stop
+    while (1)
+      ; // Stop
   }
 
   // Connect to WiFi
-  printf("[*] Connecting to %s...\n", ssid);
+  printf("[*] Connecting to %s...\n", WIFI_SSID);
   wifi_connect();
 
   // Create tasks
   xTaskCreatePinnedToCore(
-    readBMELoop,  // pvTaskCode
-    "temp_bme_task",  // pcName
-    2048,  // usStackDepth
-    NULL,  // pvParameters
-    1,  // uxPriority
-    &bmeTask,  // pvCreatedTask
-    app_cpu  // xCoreID
+      readBMELoop,     // pvTaskCode
+      "temp_bme_task", // pcName
+      2048,            // usStackDepth
+      NULL,            // pvParameters
+      1,               // uxPriority
+      &bmeTask,        // pvCreatedTask
+      app_cpu          // xCoreID
   );
   printf("[+] Created readBMELoop() task\n");
 }
 
-void loop() {
+void loop()
+{
   delay(1000);
 }
