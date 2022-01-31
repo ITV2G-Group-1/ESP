@@ -13,6 +13,18 @@ TaskHandle_t bmeTask;
 TaskHandle_t wifiTask;
 Adafruit_BME280 bme; // I2C
 
+String getUUID(int length) {
+    String hex[16] = {"0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "a", "b", "c", "d", "e", "f"};
+    
+    String uuid = "";
+    for (int i = 0; i < length; i++) {
+        uuid += hex[random(0, 16)];
+    }
+    return uuid;
+}
+
+String uuid;
+
 void wifi_connect() {
   WiFi.begin(ssid, password);
   while (WiFi.status() != WL_CONNECTED) {
@@ -22,34 +34,13 @@ void wifi_connect() {
   delay(1000);
 }
 
-void postAPI(String api, String data) {
-  // postAPI("temperature", "21.53");
-  /*
-  POST /api/[api]
-  Authorization: Bearer [token]
-
-  [data]
-  */
-  HTTPClient http;
-
-  http.begin(SERVER_HOST + "api/" + api);
-  http.addHeader("Authorization", "Bearer " + BEARER_TOKEN);
-
-  int httpCode = http.POST(data);
-  if (httpCode > 0) {
-    String response = http.getString();
-    printf("%s\n", response.c_str());
-  } else {
-    printf("[-] Error on HTTP request\n");
-  }
-}
-
 static void readBMELoop(void *arg) {
   for (;;) {
-    printf("-----------------------\n");
+    printf("------------- DATA -------------\n");
+    printf("[ ] UUID = %s\n", uuid.c_str());
     printf("[ ] Temperature = %f °C\n", bme.readTemperature());
     printf("[ ] Pressure = %f hPa\n", bme.readPressure() / 100.0F);
-    printf("[ ] Humidity = %f %\n", bme.readHumidity());
+    printf("[ ] Humidity = %f %%\n", bme.readHumidity());
     delay(5000);
   }
 }
@@ -63,6 +54,10 @@ void setup() {
   printf("[+] app_cpu is %d (%s core)\n",
          app_cpu,
          app_cpu > 0 ? "Dual" : "Single");
+
+  // Generate UUID
+  uuid = getUUID(20);
+  printf("[+] ESP32 UUID: %s\n", uuid.c_str());
 
   // Test BME280
   bool status = bme.begin(0x76);  
