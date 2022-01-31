@@ -1,4 +1,4 @@
 char* WIFI_SSID="your_wifi_name";
 char* WIFI_PASSWORD="your_wifi_password";
-String SERVER_HOST="http://example.com/";
-String BEARER_TOKEN="your_token";
+char* SERVER_HOST="192.168.1.1";
+int SERVER_PORT=17021;
