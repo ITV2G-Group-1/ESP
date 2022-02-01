@@ -6,23 +6,30 @@
 #include "EEPROM.h"
 #include "secret.h"
 
+// Config
+#define LDR_PIN 36
+#define LIGHT_DELAY 3000  // ms
+#define TEMPERATURE_DELAY 3000  // ms
+#define SEND_DELAY 10000  // ms
+
+// Hardcoded values
 #define EEPROM_SIZE 20
 #define EEPROM_UUID_ADDR 0
 #define UUID_SIZE 20
-
-const char* ntpServer = "pool.ntp.org";
-const long  gmtOffset_sec = 3600;
-const int   daylightOffset_sec = 3600;
+#define ADC_MAX_VALUE 4096
+#define LDR_VOLTAGE 3.3  // 3.3V
+#define LDR_RESISTANCE 10000  // 10kΩ
 
 String uuid;
 WiFiClient client;
-TaskHandle_t bmeTask;
+TaskHandle_t tempTask;
+TaskHandle_t lightTask;
 TaskHandle_t sendDataTask;
 Adafruit_BME280 bme;  // I2C
-static QueueHandle_t data_queue;
+QueueHandle_t data_queue;
 
 struct sensor_data {
-  String type;  // "temperature"
+  char* type;  // "temperature"
   float value;  // 21.53
   int timestamp;  // 1643652932
 };
@@ -38,13 +45,11 @@ String generateUUID(int length) {
   return uuid;
 }
 
-void wifi_connect() {
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-  }
-  printf("[+] CONNECTED\n");
-  delay(1000);
+float rawToLux(int raw) {
+    // Source: https://arduinodiy.wordpress.com/2013/11/03/measuring-light-with-an-arduino/
+    double voltage=raw*(LDR_VOLTAGE/ADC_MAX_VALUE);
+    int lux=(LDR_RESISTANCE/2)/(2*LDR_VOLTAGE*((LDR_VOLTAGE-voltage)/voltage));
+    return lux;
 }
 
 unsigned long getTime() {
@@ -56,7 +61,16 @@ unsigned long getTime() {
   return now;
 }
 
-static void readBMELoop(void *arg) {
+void wifi_connect() {
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+  }
+  printf("[+] CONNECTED (%s)\n", WiFi.localIP().toString().c_str());
+  delay(1000);
+}
+
+static void readTempLoop(void *arg) {
   for (;;) {
     int time = getTime();
 
@@ -66,35 +80,35 @@ static void readBMELoop(void *arg) {
     temp_data.timestamp = time;
     xQueueSendToBack(data_queue, &temp_data, 0);
 
-    sensor_data hum_data;
-    hum_data.type = "humidity";
-    hum_data.value = bme.readHumidity();
-    hum_data.timestamp = time;
-    xQueueSendToBack(data_queue, &hum_data, 0);
-
-    sensor_data pres_data;
-    pres_data.type = "pressure";
-    pres_data.value = bme.readPressure() / 100.0F;
-    pres_data.timestamp = time;
-    xQueueSendToBack(data_queue, &pres_data, 0);
-
-    printf("------------- DATA -------------\n");
-    printf("[ ] Time = %d\n", time);
     printf("[ ] Temperature = %f °C\n", temp_data.value);
-    printf("[ ] Pressure = %f hPa\n", pres_data.value);
-    printf("[ ] Humidity = %f %%\n", hum_data.value);
-    delay(3000);
+    delay(TEMPERATURE_DELAY);
+  }
+}
+
+static void readLightLoop(void *arg) {
+  for (;;) {
+    int time = getTime();
+
+    sensor_data light_data;
+    light_data.type = "light";
+    light_data.value = rawToLux(analogRead(LDR_PIN));
+    light_data.timestamp = time;
+    xQueueSendToBack(data_queue, &light_data, 0);
+
+    printf("[ ] Light = %d lux\n", int(light_data.value));
+    delay(LIGHT_DELAY);
   }
 }
 
 static void sendData(void *arg) {
   for (;;) {
     // Connect to socket
-    printf("[*] Connecting socket %s:%d...\n", SERVER_HOST, SERVER_PORT);
+    printf("[~] Connecting socket %s:%d...\n", SERVER_HOST, SERVER_PORT);
     while (!client.connect(SERVER_HOST, SERVER_PORT)){
       printf("[-] SOCKET CONNECTION FAILED\n");
       delay(500);
     }
+    printf("[+] Connected to socket!\n");
 
     // Create data
     DynamicJsonDocument doc(1024);
@@ -116,11 +130,12 @@ static void sendData(void *arg) {
     serializeJson(doc, json);
     client.print(json);
     client.stop();
-    delay(10000);
+    delay(SEND_DELAY);
   }
 }
 
 void exit() {
+  printf("Exiting...\n");
   while (1);  // Infinite loop
 }
 
@@ -158,46 +173,41 @@ void setup() {
   // Test BME280
   bool status = bme.begin(0x76);
   if (!status)   {
-    printf("[-] Could not find a valid BME280 sensor, check wiring!");
+    printf("[-] Could not find a valid BME280 sensor, check wiring!\n");
     exit();
   }
 
   // Connect to WiFi and socket
-  printf("[*] Connecting to %s...\n", WIFI_SSID);
+  printf("[~] Connecting to %s...\n", WIFI_SSID);
   wifi_connect();
 
   // Create queue (1000 items)
   data_queue = xQueueCreate(1000, sizeof(struct sensor_data));
 
   // Synchronize time with NTP server
-  configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
+  configTime(3600, 3600, "0.europe.pool.ntp.org", "1.europe.pool.ntp.org", "2.europe.pool.ntp.org");
 
   struct tm timeinfo;
   if(!getLocalTime(&timeinfo)){
-    printf("Failed to obtain time\n");
+    printf("[-] Failed to obtain time\n");
     exit();
   }
 
   // Create tasks
   xTaskCreatePinnedToCore(
-      readBMELoop,     // pvTaskCode
-      "temp_bme_task", // pcName
-      2048,            // usStackDepth
-      NULL,            // pvParameters
-      1,               // uxPriority
-      &bmeTask,        // pvCreatedTask
-      app_cpu          // xCoreID
-  );
-  printf("[+] Created readBMELoop() task\n");
+      readTempLoop,      // pvTaskCode
+      "read_temp_task",  // pcName
+      2048, NULL, 1, &tempTask, app_cpu);
+  printf("[+] Created readTempLoop() task\n");
   xTaskCreatePinnedToCore(
-      sendData,
-      "send_data_task",
-      4096,
-      NULL,
-      1,
-      &sendDataTask,
-      app_cpu
-  );
+      readLightLoop,     // pvTaskCode
+      "read_light_task", // pcName
+      2048, NULL, 1, &lightTask, app_cpu);
+  printf("[+] Created readLightLoop() task\n");
+  xTaskCreatePinnedToCore(
+      sendData,          // pvTaskCode
+      "send_data_task",  // pcName
+      4096, NULL, 1, &sendDataTask, app_cpu);
   printf("[+] Created sendData() task\n");
 }
 
