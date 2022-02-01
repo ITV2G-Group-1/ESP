@@ -2,12 +2,17 @@
 #include <Adafruit_BME280.h>
 #include <ArduinoJson.h>
 #include <WiFi.h>
+#include "time.h"
 #include "EEPROM.h"
 #include "secret.h"
 
 #define EEPROM_SIZE 20
 #define EEPROM_UUID_ADDR 0
 #define UUID_SIZE 20
+
+const char* ntpServer = "pool.ntp.org";
+const long  gmtOffset_sec = 3600;
+const int   daylightOffset_sec = 3600;
 
 String uuid;
 WiFiClient client;
@@ -42,28 +47,39 @@ void wifi_connect() {
   delay(1000);
 }
 
+unsigned long getTime() {
+  time_t now;
+  struct tm timeinfo;
+
+  getLocalTime(&timeinfo);
+  time(&now);
+  return now;
+}
+
 static void readBMELoop(void *arg) {
   for (;;) {
+    int time = getTime();
+
     sensor_data temp_data;
     temp_data.type = "temperature";
     temp_data.value = bme.readTemperature();
-    temp_data.timestamp = 1643652932;
+    temp_data.timestamp = time;
     xQueueSendToBack(data_queue, &temp_data, 0);
 
     sensor_data hum_data;
     hum_data.type = "humidity";
     hum_data.value = bme.readHumidity();
-    hum_data.timestamp = 1643652932;
+    hum_data.timestamp = time;
     xQueueSendToBack(data_queue, &hum_data, 0);
 
     sensor_data pres_data;
     pres_data.type = "pressure";
     pres_data.value = bme.readPressure() / 100.0F;
-    pres_data.timestamp = 1643652932;
+    pres_data.timestamp = time;
     xQueueSendToBack(data_queue, &pres_data, 0);
 
     printf("------------- DATA -------------\n");
-    printf("[ ] UUID = %s\n", uuid.c_str());
+    printf("[ ] Time = %d\n", time);
     printf("[ ] Temperature = %f °C\n", temp_data.value);
     printf("[ ] Pressure = %f hPa\n", pres_data.value);
     printf("[ ] Humidity = %f %%\n", hum_data.value);
@@ -104,8 +120,13 @@ static void sendData(void *arg) {
   }
 }
 
+void exit() {
+  while (1);  // Infinite loop
+}
+
 void setup() {
   delay(500); // Pause for serial setup
+  Serial.begin(115200);
   EEPROM.begin(EEPROM_SIZE);
 
   // Get CPU number
@@ -138,15 +159,24 @@ void setup() {
   bool status = bme.begin(0x76);
   if (!status)   {
     printf("[-] Could not find a valid BME280 sensor, check wiring!");
-    while (1); // Stop
+    exit();
   }
 
   // Connect to WiFi and socket
   printf("[*] Connecting to %s...\n", WIFI_SSID);
   wifi_connect();
 
-  // Create queue
+  // Create queue (1000 items)
   data_queue = xQueueCreate(1000, sizeof(struct sensor_data));
+
+  // Synchronize time with NTP server
+  configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
+
+  struct tm timeinfo;
+  if(!getLocalTime(&timeinfo)){
+    printf("Failed to obtain time\n");
+    exit();
+  }
 
   // Create tasks
   xTaskCreatePinnedToCore(
