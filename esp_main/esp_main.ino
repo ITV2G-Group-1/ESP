@@ -111,7 +111,7 @@ static void sendData(void *arg) {
     printf("[+] Connected to socket!\n");
 
     // Create data
-    DynamicJsonDocument doc(1024);
+    DynamicJsonDocument doc(2048);
     doc["uuid"] = uuid;
     JsonArray data = doc.createNestedArray("data");
 
@@ -181,8 +181,8 @@ void setup() {
   printf("[~] Connecting to %s...\n", WIFI_SSID);
   wifi_connect();
 
-  // Create queue (1000 items)
-  data_queue = xQueueCreate(1000, sizeof(struct sensor_data));
+  // Create queue (2048 items)
+  data_queue = xQueueCreate(2048, sizeof(struct sensor_data));
 
   // Synchronize time with NTP server
   configTime(3600, 3600, "0.europe.pool.ntp.org", "1.europe.pool.ntp.org", "2.europe.pool.ntp.org");
