@@ -1,5 +1,7 @@
 #include <Adafruit_Sensor.h>
 #include <Adafruit_BME280.h>
+#include "TinyGPS++.h"
+#include <HardwareSerial.h>
 #include <ArduinoJson.h>
 #include <WiFi.h>
 #include "time.h"
@@ -10,6 +12,7 @@
 #define LDR_PIN 36
 #define LIGHT_DELAY 3000  // ms
 #define TEMPERATURE_DELAY 3000  // ms
+#define GPS_DELAY 3000  // ms
 #define SEND_DELAY 10000  // ms
 
 // Hardcoded values
@@ -22,15 +25,25 @@
 
 String uuid;
 WiFiClient client;
+Adafruit_BME280 bme;  // I2C
+TinyGPSPlus gps;
+HardwareSerial SerialGPS(1);
+TaskHandle_t gpsTask;
 TaskHandle_t tempTask;
 TaskHandle_t lightTask;
 TaskHandle_t sendDataTask;
-Adafruit_BME280 bme;  // I2C
-QueueHandle_t data_queue;
+QueueHandle_t gps_queue;
+QueueHandle_t sensor_queue;
 
-struct sensor_data {
+struct sensor_type {
   char* type;  // "temperature"
   float value;  // 21.53
+  int timestamp;  // 1643652932
+};
+struct gps_type {
+  char* type;  // "temperature"
+  float lat;
+  float lng;
   int timestamp;  // 1643652932
 };
 
@@ -70,15 +83,37 @@ void wifi_connect() {
   delay(1000);
 }
 
+static void readGPSLoop(void *arg) {
+  for (;;) {
+    int time = getTime();
+
+    while (SerialGPS.available() > 0) {
+        char c = SerialGPS.read();
+        // printf("%c", c);
+        gps.encode(c);
+    }
+
+    gps_type gps_data;
+    gps_data.type = "temperature";
+    gps_data.lat = gps.location.lat();
+    gps_data.lng = gps.location.lng();
+    gps_data.timestamp = time;
+    xQueueSendToBack(gps_queue, &gps_data, 0);
+
+    printf("[ ] GPS = (%f, %f)\n", gps_data.lat, gps_data.lng);
+    delay(GPS_DELAY);
+  }
+}
+
 static void readTempLoop(void *arg) {
   for (;;) {
     int time = getTime();
 
-    sensor_data temp_data;
+    sensor_type temp_data;
     temp_data.type = "temperature";
     temp_data.value = bme.readTemperature();
     temp_data.timestamp = time;
-    xQueueSendToBack(data_queue, &temp_data, 0);
+    xQueueSendToBack(sensor_queue, &temp_data, 0);
 
     printf("[ ] Temperature = %f °C\n", temp_data.value);
     delay(TEMPERATURE_DELAY);
@@ -89,11 +124,11 @@ static void readLightLoop(void *arg) {
   for (;;) {
     int time = getTime();
 
-    sensor_data light_data;
+    sensor_type light_data;
     light_data.type = "light";
     light_data.value = rawToLux(analogRead(LDR_PIN));
     light_data.timestamp = time;
-    xQueueSendToBack(data_queue, &light_data, 0);
+    xQueueSendToBack(sensor_queue, &light_data, 0);
 
     printf("[ ] Light = %d lux\n", int(light_data.value));
     delay(LIGHT_DELAY);
@@ -114,15 +149,23 @@ static void sendData(void *arg) {
     DynamicJsonDocument doc(2048);
     doc["uuid"] = uuid;
     JsonArray data = doc.createNestedArray("data");
+    JsonObject json_data;
 
     // Get data from queue
-    sensor_data queue_data;
-    JsonObject json_data;
-    while (xQueueReceive(data_queue, &queue_data, 0) == pdTRUE) {
+    sensor_type sensor_data;
+    while (xQueueReceive(sensor_queue, &sensor_data, 0) == pdTRUE) {
       json_data = data.createNestedObject();
-      json_data["type"] = queue_data.type;
-      json_data["value"] = queue_data.value;
-      json_data["timestamp"] = queue_data.timestamp;
+      json_data["type"] = sensor_data.type;
+      json_data["value"] = sensor_data.value;
+      json_data["timestamp"] = sensor_data.timestamp;
+    }
+    gps_type gps_data;
+    while (xQueueReceive(gps_queue, &gps_data, 0) == pdTRUE) {
+      json_data = data.createNestedObject();
+      json_data["type"] = gps_data.type;
+      json_data["lat"] = gps_data.lat;
+      json_data["lng"] = gps_data.lng;
+      json_data["timestamp"] = gps_data.timestamp;
     }
 
     // Send data
@@ -143,6 +186,7 @@ void setup() {
   delay(500); // Pause for serial setup
   Serial.begin(115200);
   EEPROM.begin(EEPROM_SIZE);
+  SerialGPS.begin(9600, SERIAL_8N1, 16, 17);
 
   // Get CPU number
   int app_cpu = 0;
@@ -182,7 +226,8 @@ void setup() {
   wifi_connect();
 
   // Create queue (2048 items)
-  data_queue = xQueueCreate(2048, sizeof(struct sensor_data));
+  sensor_queue = xQueueCreate(2048, sizeof(struct sensor_type));
+  gps_queue = xQueueCreate(2048, sizeof(struct gps_type));
 
   // Synchronize time with NTP server
   configTime(3600, 3600, "0.europe.pool.ntp.org", "1.europe.pool.ntp.org", "2.europe.pool.ntp.org");
@@ -194,6 +239,11 @@ void setup() {
   }
 
   // Create tasks
+  xTaskCreatePinnedToCore(
+      readGPSLoop,     // pvTaskCode
+      "read_gps_task", // pcName
+      2048, NULL, 1, &gpsTask, app_cpu);
+  printf("[+] Created readGPSLoop() task\n");
   xTaskCreatePinnedToCore(
       readTempLoop,      // pvTaskCode
       "read_temp_task",  // pcName
