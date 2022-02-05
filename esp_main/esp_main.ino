@@ -136,13 +136,25 @@ static void readLightLoop(void *arg) {
   }
 }
 
+void errorBlink() {
+  digitalWrite(BUILTIN_LED, HIGH);
+  delay(200);
+  digitalWrite(BUILTIN_LED, LOW);
+  delay(200);
+  digitalWrite(BUILTIN_LED, HIGH);
+  delay(200);
+  digitalWrite(BUILTIN_LED, LOW);
+  delay(200);
+}
+
 static void sendData(void *arg) {
   for (;;) {
     // Connect to socket
     printf("[~] Connecting socket %s:%d...\n", SERVER_HOST, SERVER_PORT);
     while (!client.connect(SERVER_HOST, SERVER_PORT)){
       printf("[-] SOCKET CONNECTION FAILED\n");
-      delay(500);
+      errorBlink();
+      delay(1000);
     }
     printf("[+] Connected to socket!\n");
 
@@ -179,7 +191,7 @@ static void sendData(void *arg) {
 }
 
 void restart() {
-  printf("Exiting...\n");
+  printf("Restarting...\n");
   delay(5000);
   ESP.restart();
 }
