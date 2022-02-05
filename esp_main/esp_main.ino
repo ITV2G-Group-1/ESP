@@ -22,6 +22,7 @@
 #define ADC_MAX_VALUE 4096
 #define LDR_VOLTAGE 3.3  // 3.3V
 #define LDR_RESISTANCE 10000  // 10kΩ
+#define BUILTIN_LED 2
 
 String uuid;
 WiFiClient client;
@@ -94,7 +95,7 @@ static void readGPSLoop(void *arg) {
     }
 
     gps_type gps_data;
-    gps_data.type = "temperature";
+    gps_data.type = "gps";
     gps_data.lat = gps.location.lat();
     gps_data.lng = gps.location.lng();
     gps_data.timestamp = time;
@@ -177,13 +178,16 @@ static void sendData(void *arg) {
   }
 }
 
-void exit() {
+void restart() {
   printf("Exiting...\n");
-  while (1);  // Infinite loop
+  delay(5000);
+  ESP.restart();
 }
 
 void setup() {
-  delay(500); // Pause for serial setup
+  pinMode(BUILTIN_LED, OUTPUT);  // Status LED
+  digitalWrite(BUILTIN_LED, HIGH);  // LED on
+
   Serial.begin(115200);
   EEPROM.begin(EEPROM_SIZE);
   SerialGPS.begin(9600, SERIAL_8N1, 16, 17);
@@ -218,7 +222,7 @@ void setup() {
   bool status = bme.begin(0x76);
   if (!status)   {
     printf("[-] Could not find a valid BME280 sensor, check wiring!\n");
-    exit();
+    restart();
   }
 
   // Connect to WiFi and socket
@@ -235,7 +239,7 @@ void setup() {
   struct tm timeinfo;
   if(!getLocalTime(&timeinfo)){
     printf("[-] Failed to obtain time\n");
-    exit();
+    restart();
   }
 
   // Create tasks
@@ -259,6 +263,8 @@ void setup() {
       "send_data_task",  // pcName
       4096, NULL, 1, &sendDataTask, app_cpu);
   printf("[+] Created sendData() task\n");
+
+  digitalWrite(BUILTIN_LED, LOW);  // LED off
 }
 
 void loop() {
