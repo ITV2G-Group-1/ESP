@@ -24,6 +24,7 @@
 #define LDR_RESISTANCE 10000  // 10kΩ
 #define BUILTIN_LED 2
 
+// Initialize variables
 String uuid;
 WiFiClient client;
 Adafruit_BME280 bme;  // I2C
@@ -37,36 +38,38 @@ QueueHandle_t gps_queue;
 QueueHandle_t sensor_queue;
 
 struct sensor_type {
-  char* type;  // "temperature"
-  float value;  // 21.53
-  int timestamp;  // 1643652932
+  char* type;  // ex. "temperature"
+  float value;  // ex. 21.53
+  int timestamp;  // ex. 1643652932
 };
 struct gps_type {
-  char* type;  // "temperature"
-  float lat;
-  float lng;
-  int timestamp;  // 1643652932
+  char* type;  // ex. "gps"
+  float lat;  // ex. -34.928
+  float lng;  // ex. 138.599
+  int timestamp;  // ex. 1643652932
 };
 
 String generateUUID(int length) {
+  // Returns String of `length` random hex characters (Example: 53d6d921e7c962236292435e7b905561)
   String hex[16] = {"0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "a", "b", "c", "d", "e", "f"};
 
   String uuid = "";
-  for (int i = 0; i < length; i++)
-  {
+  for (int i = 0; i < length; i++) {
     uuid += hex[random(0, 16)];
   }
   return uuid;
 }
 
 float rawToLux(int raw) {
-    // Source: https://arduinodiy.wordpress.com/2013/11/03/measuring-light-with-an-arduino/
-    double voltage=raw*(LDR_VOLTAGE/ADC_MAX_VALUE);
-    int lux=(LDR_RESISTANCE/2)/(2*LDR_VOLTAGE*((LDR_VOLTAGE-voltage)/voltage));
-    return lux;
+  // Converts raw ADC value to lux
+  // Source: https://arduinodiy.wordpress.com/2013/11/03/measuring-light-with-an-arduino/
+  double voltage=raw*(LDR_VOLTAGE/ADC_MAX_VALUE);
+  int lux=(LDR_RESISTANCE/2)/(2*LDR_VOLTAGE*((LDR_VOLTAGE-voltage)/voltage));
+  return lux;
 }
 
 unsigned long getTime() {
+  // Returns current time in seconds (unix timestamp)
   time_t now;
   struct tm timeinfo;
 
@@ -76,37 +79,39 @@ unsigned long getTime() {
 }
 
 void wifi_connect() {
+  // Connect to WiFi
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-  while (WiFi.status() != WL_CONNECTED) {
+  while (WiFi.status() != WL_CONNECTED) {  // Wait for connection
     delay(500);
   }
   printf("[+] CONNECTED (%s)\n", WiFi.localIP().toString().c_str());
   delay(1000);
 }
 
-static void readGPSLoop(void *arg) {
+static void readGPSLoop(void *arg) {  // Task for reading GPS and sending to queue
   for (;;) {
     int time = getTime();
 
+    // Read GPS data
     while (SerialGPS.available() > 0) {
         char c = SerialGPS.read();
-        // printf("%c", c);
         gps.encode(c);
     }
 
-    gps_type gps_data;
+    // Create struct
+    gps_type gps_data;  // Uses different type for lat and lng
     gps_data.type = "gps";
     gps_data.lat = gps.location.lat();
     gps_data.lng = gps.location.lng();
     gps_data.timestamp = time;
-    xQueueSendToBack(gps_queue, &gps_data, 0);
+    xQueueSendToBack(gps_queue, &gps_data, 0);  // Send to queue
 
     printf("[ ] GPS = (%f, %f)\n", gps_data.lat, gps_data.lng);
-    delay(GPS_DELAY);
+    delay(GPS_DELAY);  // Interval
   }
 }
 
-static void readTempLoop(void *arg) {
+static void readTempLoop(void *arg) {  // Task for reading temperature and sending to queue
   for (;;) {
     int time = getTime();
 
@@ -121,7 +126,7 @@ static void readTempLoop(void *arg) {
   }
 }
 
-static void readLightLoop(void *arg) {
+static void readLightLoop(void *arg) {  // Task for reading light intensity and sending to queue
   for (;;) {
     int time = getTime();
 
@@ -136,7 +141,7 @@ static void readLightLoop(void *arg) {
   }
 }
 
-void errorBlink() {
+void errorBlink() {  // Blink twice quickly
   digitalWrite(BUILTIN_LED, HIGH);
   delay(200);
   digitalWrite(BUILTIN_LED, LOW);
@@ -151,28 +156,28 @@ static void sendData(void *arg) {
   for (;;) {
     // Connect to socket
     printf("[~] Connecting socket %s:%d...\n", SERVER_HOST, SERVER_PORT);
-    while (!client.connect(SERVER_HOST, SERVER_PORT)){
+    while (!client.connect(SERVER_HOST, SERVER_PORT)){  // Wait for connection, try again if failed
       printf("[-] SOCKET CONNECTION FAILED\n");
       errorBlink();
       delay(1000);
     }
     printf("[+] Connected to socket!\n");
 
-    // Create data
+    // Create json
     DynamicJsonDocument doc(2048);
     doc["uuid"] = uuid;
     JsonArray data = doc.createNestedArray("data");
     JsonObject json_data;
 
     // Get data from queue
-    sensor_type sensor_data;
+    sensor_type sensor_data;  // Generic sensors
     while (xQueueReceive(sensor_queue, &sensor_data, 0) == pdTRUE) {
       json_data = data.createNestedObject();
       json_data["type"] = sensor_data.type;
       json_data["value"] = sensor_data.value;
       json_data["timestamp"] = sensor_data.timestamp;
     }
-    gps_type gps_data;
+    gps_type gps_data;  // GPS
     while (xQueueReceive(gps_queue, &gps_data, 0) == pdTRUE) {
       json_data = data.createNestedObject();
       json_data["type"] = gps_data.type;
@@ -186,11 +191,11 @@ static void sendData(void *arg) {
     serializeJson(doc, json);
     client.print(json);
     client.stop();
-    delay(SEND_DELAY);
+    delay(SEND_DELAY);  // Interval
   }
 }
 
-void restart() {
+void restart() {  // Restart like pressing EN button
   printf("Restarting...\n");
   delay(5000);
   ESP.restart();
@@ -279,6 +284,6 @@ void setup() {
   digitalWrite(BUILTIN_LED, LOW);  // LED off
 }
 
-void loop() {
+void loop() {  // Do nothing, tasks will run
   delay(1000);
 }
